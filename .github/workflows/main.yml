@@ -1,0 +1,33 @@
+name: Build NickPlugin
+
+on:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Java 21 설정
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Maven 빌드
+        run: mvn clean package -B
+        working-directory: NickPlugin
+
+      - name: 릴리즈 생성 및 JAR 업로드
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: "NickPlugin Build #${{ github.run_number }}"
+          files: NickPlugin/target/NickPlugin-*.jar
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
