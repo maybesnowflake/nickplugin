@@ -164,7 +164,7 @@ public class NickManager {
                         EnumWrappers.NativeGameMode.fromBukkit(player.getGameMode()),
                         profile,
                         displayName,
-                        null
+                        (com.comphenix.protocol.wrappers.WrappedRemoteChatSessionData) null
                 );
                 addPacket.getPlayerInfoDataLists().write(1, List.of(infoData));
                 pm.sendServerPacket(observer, addPacket);
