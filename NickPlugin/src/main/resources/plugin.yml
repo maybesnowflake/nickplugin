@@ -1,0 +1,47 @@
+name: NickPlugin
+version: 1.0.0
+main: com.nickplugin.NickPlugin
+api-version: 1.21
+description: 닉네임 변경 플러그인
+author: NickPlugin
+depend: [ProtocolLib]
+
+commands:
+  nick:
+    description: 닉네임을 변경합니다
+    usage: /nick <닉네임> [플레이어]
+    aliases: [nickname, 닉]
+  nickreset:
+    description: 닉네임을 초기화합니다
+    usage: /nickreset [플레이어]
+    aliases: [nickrst, 닉초기화]
+  nicklist:
+    description: 닉네임 목록을 봅니다
+    usage: /nicklist
+    aliases: [닉목록]
+
+permissions:
+  nickplugin.nick:
+    description: 본인 닉네임 변경
+    default: true
+  nickplugin.nick.others:
+    description: 다른 플레이어 닉네임 변경
+    default: op
+  nickplugin.nick.color:
+    description: 색상 코드 사용 가능
+    default: op
+  nickplugin.nickreset:
+    description: 본인 닉네임 초기화
+    default: true
+  nickplugin.nickreset.others:
+    description: 다른 플레이어 닉네임 초기화
+    default: op
+  nickplugin.nicklist:
+    description: 닉네임 목록 열람
+    default: op
+  nickplugin.bypass.length:
+    description: 닉네임 길이 제한 무시
+    default: op
+  nickplugin.bypass.filter:
+    description: 욕설 필터 무시
+    default: op
