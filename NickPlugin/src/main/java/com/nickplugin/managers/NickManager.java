@@ -5,14 +5,13 @@ import com.comphenix.protocol.ProtocolLibrary;
 import com.comphenix.protocol.ProtocolManager;
 import com.comphenix.protocol.events.PacketContainer;
 import com.comphenix.protocol.wrappers.*;
-import com.comphenix.protocol.wrappers.EnumWrappers.NativeGameMode;
-import com.comphenix.protocol.wrappers.EnumWrappers.PlayerInfoAction;
 import com.nickplugin.NickPlugin;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
+import org.bukkit.scoreboard.*;
 
 import java.io.File;
 import java.io.IOException;
@@ -115,112 +114,99 @@ public class NickManager {
     }
 
     // ==============================
-    //   닉네임 적용 (ProtocolLib)
+    //   닉네임 적용
     // ==============================
 
     public void applyNick(Player player) {
         String nick = getNick(player);
+        String colored = ChatColor.translateAlternateColorCodes('&', nick);
 
-        // 탭리스트 이름
-        player.setPlayerListName(ChatColor.translateAlternateColorCodes('&', nick));
-        // displayName (채팅용)
-        player.setDisplayName(ChatColor.translateAlternateColorCodes('&', nick) + ChatColor.RESET);
+        // 1) 탭리스트
+        player.setPlayerListName(colored);
 
-        // ProtocolLib으로 이름표 패킷 전송
-        // 메인 스레드에서 실행 보장
-        Bukkit.getScheduler().runTask(plugin, () -> sendNamePackets(player, nick));
+        // 2) displayName (채팅용)
+        player.setDisplayName(colored + ChatColor.RESET);
+
+        // 3) 이름표 — 메인 스레드에서 실행
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            applyScoreboardNametag(player, colored);
+            sendPlayerInfoPacket(player, colored);
+        });
     }
 
-    private void sendNamePackets(Player player, String nick) {
+    /**
+     * 스코어보드 팀으로 이름표 제어
+     * - 닉네임 있을 때: prefix=닉네임, 원래 이름 숨김(NEVER) → prefix만 보임
+     * - 닉네임 없을 때: 팀 제거 → 원래 이름표 복구
+     *
+     * 핵심: NAME_TAG_VISIBILITY = NEVER 로 원래 이름 숨기고
+     *       prefix 에 닉네임을 넣으면 prefix는 항상 보임
+     *       단, prefix visibility 는 별도 제어 불가 — 대신 아래 트릭 사용:
+     *       팀의 prefix 를 닉네임으로 설정하고 NAME_TAG_VISIBILITY = NEVER 하면
+     *       prefix 도 같이 숨겨지므로, ProtocolLib 으로 별도 패킷 전송
+     */
+    private void applyScoreboardNametag(Player player, String colored) {
+        Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
+        String teamName = getTeamName(player);
+
+        // 기존 팀 제거
+        Team existing = scoreboard.getTeam(teamName);
+        if (existing != null) existing.unregister();
+
+        if (hasNick(player)) {
+            Team team = scoreboard.registerNewTeam(teamName);
+            // prefix = 닉네임, suffix 비움
+            // NAME_TAG_VISIBILITY = ALWAYS 유지 (prefix 포함해서 보여야 하므로)
+            // 원래 이름(하얀 글씨)을 안 보이게: §r§0 색으로 원래이름 덮기
+            String prefix = colored;
+            // 원래 이름이 prefix 뒤에 붙으므로, §0(검정+불투명) 으로 원래이름 색 변경
+            // 배경이 어두우면 안 보이게 됨. suffix로 §r 복구
+            team.setPrefix(prefix + ChatColor.BLACK);
+            team.setSuffix(ChatColor.RESET.toString());
+            team.setOption(Team.Option.NAME_TAG_VISIBILITY, Team.OptionStatus.ALWAYS);
+            team.setAllowFriendlyFire(true);
+            team.setCanSeeFriendlyInvisibles(true);
+            team.addEntry(player.getName());
+        }
+        // 닉네임 없으면 팀 제거로 원래 이름표 복구됨
+    }
+
+    /**
+     * ProtocolLib으로 탭리스트 PLAYER_INFO 패킷 전송
+     * — 탭리스트에 닉네임 반영
+     */
+    private void sendPlayerInfoPacket(Player player, String colored) {
         ProtocolManager pm = ProtocolLibrary.getProtocolManager();
 
-        // 모든 온라인 플레이어에게 전송 (본인 포함)
-        for (Player observer : Bukkit.getOnlinePlayers()) {
-            try {
-                // 1) PLAYER_INFO_REMOVE — 기존 탭리스트 항목 제거
-                PacketContainer removePacket = pm.createPacket(PacketType.Play.Server.PLAYER_INFO_REMOVE);
-                removePacket.getUUIDLists().write(0, List.of(player.getUniqueId()));
-                pm.sendServerPacket(observer, removePacket);
+        try {
+            // UPDATE_DISPLAY_NAME 액션으로 탭리스트 이름만 갱신
+            PacketContainer packet = pm.createPacket(PacketType.Play.Server.PLAYER_INFO);
+            packet.getPlayerInfoActions().write(0,
+                    EnumSet.of(EnumWrappers.PlayerInfoAction.UPDATE_DISPLAY_NAME)
+            );
 
-                // 2) PLAYER_INFO — 새 닉네임으로 탭리스트 항목 추가
-                PacketContainer addPacket = pm.createPacket(PacketType.Play.Server.PLAYER_INFO);
-                addPacket.getPlayerInfoActions().write(0,
-                        EnumSet.of(
-                                EnumWrappers.PlayerInfoAction.ADD_PLAYER,
-                                EnumWrappers.PlayerInfoAction.UPDATE_DISPLAY_NAME,
-                                EnumWrappers.PlayerInfoAction.UPDATE_LISTED
-                        )
-                );
+            WrappedChatComponent displayName = WrappedChatComponent.fromText(colored);
+            WrappedGameProfile profile = WrappedGameProfile.fromPlayer(player);
 
-                WrappedGameProfile profile = WrappedGameProfile.fromPlayer(player);
-                WrappedChatComponent displayName = WrappedChatComponent.fromText(
-                        ChatColor.translateAlternateColorCodes('&', nick)
-                );
+            PlayerInfoData infoData = new PlayerInfoData(
+                    player.getUniqueId(),
+                    player.getPing(),
+                    true,
+                    EnumWrappers.NativeGameMode.fromBukkit(player.getGameMode()),
+                    profile,
+                    displayName,
+                    (com.comphenix.protocol.wrappers.WrappedRemoteChatSessionData) null
+            );
 
-                PlayerInfoData infoData = new PlayerInfoData(
-                        player.getUniqueId(),
-                        player.getPing(),
-                        true,
-                        EnumWrappers.NativeGameMode.fromBukkit(player.getGameMode()),
-                        profile,
-                        displayName,
-                        (com.comphenix.protocol.wrappers.WrappedRemoteChatSessionData) null
-                );
-                addPacket.getPlayerInfoDataLists().write(1, List.of(infoData));
-                pm.sendServerPacket(observer, addPacket);
+            packet.getPlayerInfoDataLists().write(1, List.of(infoData));
 
-                // 3) ENTITY_METADATA — 이름표(네임태그) 변경
-                // CustomName 을 설정하고 CustomNameVisible=true
-                // Paper API로 직접 처리
-            } catch (Exception e) {
-                plugin.getLogger().warning("패킷 전송 실패 (" + observer.getName() + "): " + e.getMessage());
+            // 모든 플레이어에게 전송
+            for (Player observer : Bukkit.getOnlinePlayers()) {
+                pm.sendServerPacket(observer, packet);
             }
+        } catch (Exception e) {
+            plugin.getLogger().warning("PLAYER_INFO 패킷 실패: " + e.getMessage());
         }
-
-        // 이름표는 CustomName 방식으로 처리 (패킷보다 안정적)
-        applyNameTag(player, nick);
-    }
-
-    private void applyNameTag(Player player, String nick) {
-        // Paper API: CustomName으로 네임태그 변경
-        // net.kyori.adventure.text 사용
-        if (hasNick(player)) {
-            net.kyori.adventure.text.Component nameComponent =
-                    net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer
-                            .legacyAmpersand()
-                            .deserialize(nick);
-            player.customName(nameComponent);
-            player.setCustomNameVisible(true);
-
-            // 기본 이름표 숨기기 — 스코어보드 팀으로 원래 이름표 숨김
-            hideDefaultNameTag(player);
-        } else {
-            player.customName(null);
-            player.setCustomNameVisible(false);
-            showDefaultNameTag(player);
-        }
-    }
-
-    private void hideDefaultNameTag(Player player) {
-        // 스코어보드 팀으로 원래 이름표(위에 뜨는 하얀 이름) 숨기기
-        var scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
-        String teamName = getTeamName(player);
-
-        var existing = scoreboard.getTeam(teamName);
-        if (existing != null) existing.unregister();
-
-        var team = scoreboard.registerNewTeam(teamName);
-        // 이름표 완전 숨김
-        team.setOption(org.bukkit.scoreboard.Team.Option.NAME_TAG_VISIBILITY,
-                org.bukkit.scoreboard.Team.OptionStatus.NEVER);
-        team.addEntry(player.getName());
-    }
-
-    private void showDefaultNameTag(Player player) {
-        var scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
-        String teamName = getTeamName(player);
-        var existing = scoreboard.getTeam(teamName);
-        if (existing != null) existing.unregister();
     }
 
     // ==============================
